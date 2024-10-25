@@ -1,0 +1,1162 @@
+<template>
+
+	<!-- :styleName="styleName"
+	:change:styleName="amap.setMapStyleEvent" -->
+
+	<!-- :polygons="polygons"
+	:change:polygons="amap.addPolygon" -->
+
+	<!-- :borderPolygonArr="borderPolygonArr"
+	:change:borderPolygonArr="amap.addBorderPolygon" -->
+
+	<view @click="amap.onClick" :borderStyleObj="borderStyleObj" :change:borderStyleObj="setMapBorderStyle"
+		:fitMap="fitMap" :change:fitMap="changeFitMap" :addressObj="addressObj" :change:addressObj="addLocationMarker"
+		:layers="layers" :change:layers="amap.setLayersEvent" :zoom="zoom" :change:zoom="amap.setMapZoom"
+		:htmlMarkers="htmlMarkers" :change:htmlMarkers="amap.addHtmlMarker" :centerObj="centerObj"
+		:change:centerObj="amap.setMapCenter" id="amap" class="locationmaps"></view>
+</template>
+
+<script>
+	export default {
+		data() {
+			return {
+				fitMap: false,
+				layers: false, // 地图图层
+				borderStyleObj: {
+					adCode: '',
+					depth: '',
+					style: null
+				},
+				addressObj: {
+					lng: '',
+					lat: '',
+					angle: '',
+					center: false,
+					pointToPoint: false,
+				},
+				styleName: '',
+				zoom: 14,
+				htmlMarkers: [],
+				polygons: [],
+				borderPolygonArr: [],
+				centerObj: {
+					center: null
+				} // 地图经纬度
+			}
+		},
+		methods: {
+			setFixMap(value) {
+				this.fitMap = value;
+			},
+
+			setBorderStyle(borderStyle) {
+				this.borderStyleObj = borderStyle;
+			},
+
+			setLocationPoint(address) {
+
+				this.addressObj = address;
+			},
+			// 设置层级
+			setZoom(index) {
+				this.zoom = index;
+			},
+			// 设置地图layer
+			setLayers(layers) {
+				////console.log(layers, 'setLayer');
+
+				this.layers = layers;
+			},
+			// 设置地图样式
+			setMapStyle(styleName) {
+				// this.styleName = styleName;
+			},
+			// 增加html点位
+			addHtmlMarkers(arr) {
+				this.htmlMarkers = arr;
+			},
+			// 增加面积区域
+			addPolygons(arr) {
+				////console.log(arr, 'arr')
+				this.polygons = arr;
+			},
+
+			// 厂区边界
+			addPolygonAround(item) {
+				//console.log(this.borderPolygonArr);
+				//console.log(item);
+				this.borderPolygonArr = item;
+			},
+			// 设置中心点 经纬度数组
+			setCenter(arr) {
+				this.centerObj.center = arr;
+			},
+			onViewClick(e) {
+				if (e.type == 'changeZoom') {
+					this.zoom = e.zoom;
+				}
+
+				this.$emit('mapClick', e)
+				////console.log(e, 'method e')
+			}
+		}
+	}
+</script>
+
+
+<script module="amap" lang="renderjs">
+	import selectIco from './location-icon.js'
+
+	window._AMapSecurityConfig = {
+		securityJsCode: '43dad57efc2bbf2e7b9c5bf299229999',
+	}
+
+	import {
+		setMapArea,
+		getMapColor
+	} from './colors.js';
+
+	import {
+		calculateDistance,
+		getCenterPoint
+	} from '@/common/mapUtils';
+
+	import RoadUtils from './road.js';
+
+	// import {
+	// 	getSelfRoad,
+	// 	getGDRoad,
+	// 	renderRoad
+	// } from './road.js';
+
+	import MapUtils from './MapUtils.js';
+
+	import {
+		POLLUTION_ARR
+	} from './common.js';
+	// let POLLUTION_ARR = [];
+
+	import axios from 'axios'
+
+	import {
+		WEB_URL
+	} from '@/common/configBaseUrl.js';
+
+	let BASE_URL = '/ydzfsx'
+	// #ifdef APP-PLUS
+	BASE_URL = WEB_URL + 'ydzfsx'
+	// #endif
+
+	export default {
+
+		data() {
+			return {
+				$: null,
+				roadType: 'line', //line 划线 walk  步行
+				roadPollutionId: '', // 路线污染源编号
+				roadWalkArr: [], // 道路导航数据
+				oldLinePath: [],
+				locationTimer: null,
+				oldAddressObj: {
+					oldAngle: 0,
+					lng: '',
+					lat: ''
+				},
+				markerArr: [], // 点位
+				polygonArr: [], // 面
+				aroundArr: [], // 周边，最大
+				locationArr: [], // 定位
+				goWayArr: [], // 去这里数组
+				firstRender: true,
+				satellite: null,
+				roadNet: null,
+				borderPolygonMarker: null,
+				polygonMarker: [],
+				disProvince: null,
+				locationMarker: null,
+				countMarkers: [],
+				companyMarker: null,
+				circle: null,
+				marker: null,
+				map: null,
+				line: null,
+				startLine: null,
+				endLine: null,
+				textMarker: null,
+				ownerInstanceObj: null, //service层对象
+				productDoorMarker: [], // 生产车间大门
+				boundaryDoorMarker: null, // 厂界大门
+				goWayDistance: 100000000
+			}
+		},
+
+		created() {
+			// axios.request({
+			// 	method: 'post',
+			// 	url: BASE_URL + '/mobile/yszf/getNavigateList',
+			// 	data: {}
+			// }).then(res => {
+			// 	// console.log(res, 'res');
+			// 	if (res.data.status_code == '0') {
+			// 		// console.log(res.data.data_json, 'ddd');
+			// 		POLLUTION_ARR = res.data.data_json;
+			// 	}
+			// })
+		},
+
+		mounted() {
+			this.loadLib();
+
+			this.getMapData();
+		},
+		destroyed() {
+			console.log('销毁')
+		},
+
+		methods: {
+			// 加载库
+			loadLib() {
+				const script = document.createElement('script');
+				script.src = './static/lib/zepto.js';
+				document.head.appendChild(script);
+				let self = this;
+				script.onload = function() {
+					self.$ = $;
+				}
+
+			},
+
+			changeFitMap() {
+				// console.log('changeFitMap')
+				if (!this.map) {
+					return;
+				}
+
+				this.map.setFitView(this.borderPolygonMarker);
+			},
+
+			getMapData() {
+				if (typeof window.AMap === 'function') {
+					this.initAmap()
+				} else {
+					window._AMapSecurityConfig = {
+						securityJsCode: '31bc369e76891df99e6f266c7f699f79',
+					}
+
+					// 动态引入较大类库避免影响页面展示
+					const script = document.createElement('script')
+					// script.src =
+					// 	'https://webapi.amap.com/maps?v=2.0&key=6f025e700cbacbb0bb866712d20bb35c&plugin=AMap.Walking,AMap.Geocoder,Map3D,AMap.DistrictLayer,AMap.Scale,AMap.ToolBar'
+					// script.src =
+					// 	'https://webapi.amap.com/maps?v=2.0&key=8f9295f8ca90ea9613faf3ca290d7e68&plugin=AMap.Walking,AMap.Geocoder,Map3D,AMap.DistrictLayer,AMap.Scale,AMap.ToolBar,AMap.GeoJSON'
+
+					// download the GD mapjs
+					script.src = './static/lib/maps.js';
+					script.onload = this.initAmap.bind(this)
+					document.head.appendChild(script);
+				}
+			},
+
+			addLocationMarker1(addressObj) {
+				this.addLocationMarker(addressObj);
+			},
+
+			addLocationMarker(addressObj) {
+				if (!this.map) {
+					return;
+				}
+
+				// console.log(addressObj, 'addressObj')
+
+				let lng = addressObj.lng;
+				let lat = addressObj.lat;
+
+
+
+				let self = this;
+				// 当已经有定位，就更新坐标
+				if (this.locationMarker) {
+
+					if (this.oldAddressObj.lng != lng || this.oldAddressObj.lat != lat) {
+						this.locationMarker.setPosition([lng, lat]);
+						this.oldAddressObj.lng = lng;
+						this.oldAddressObj.lat = lat;
+						this.oldAddressObj.oldAngle = addressObj.angle;
+
+						if (this.roadType == 'walk' && this.roadWalkArr.length > 0) {
+							// 语音导航
+							// RoadUtils.roadVoiceNav(this);
+						}
+					}
+					if (this.oldAddressObj.oldAngle != addressObj.angle) {
+
+						// if (this.locationTimer) return;
+						// this.locationTimer = setTimeout(() => {
+						// 	this.locationTimer = null;
+						// }, 500);
+						// this.locationMarker.setAngle(addressObj.angle || 0);
+						this.locationMarker.setContent(
+							`<div class="LocationMarker" style="transform: rotate(${addressObj.angle}deg);"><img style="width:100%;height:100%" src="${selectIco.selectIco}"></img></div>`
+						)
+						this.oldAddressObj.oldAngle = addressObj.angle
+					}
+
+				} else {
+					this.locationMarker = new AMap.Marker({
+						zIndex: 1,
+						//icon: 'https://webapi.amap.com/theme/v1.3/markers/n/mark_r.png',
+						content: `<div class="LocationMarker" style="transform: rotate(${addressObj.angle}deg);"><img style="width:100%;height:100%" src="${selectIco.selectIco}"></img></div>`,
+						// icon: new AMap.Icon({
+						// 	image: selectIco.selectIco,
+						// 	size: new AMap.Size(56, 56), //图标大小
+						// 	imageSize: new AMap.Size(56, 56)
+						// }),
+						// angle: addressObj.angle || 0,
+						offset: new AMap.Pixel(-28, -28),
+						position: [lng, lat],
+					});
+
+					this.map.add(this.locationMarker);
+
+					this.oldAddressObj.lng = lng;
+					this.oldAddressObj.lat = lat;
+					this.oldAddressObj.oldAngle = addressObj.angle;
+				}
+
+
+
+				// console.log(addressObj.center);
+				if (addressObj.center) {
+					// console.log('center');
+					this.map.setCenter([lng, lat])
+					this.map.setZoom(16)
+				}
+
+
+				if (addressObj.pointToPoint) {
+
+					addressObj.longitude = addressObj.lng;
+					addressObj.latitude = addressObj.lat;
+					// console.log('renderPointToLine', addressObj)
+					this.renderPointToLine([addressObj]);
+				}
+			},
+
+			addBorderPolygon(item) {
+				if (!this.map) {
+					return;
+				}
+
+				if (this.borderPolygonMarker) {
+					// console.log('已经有边界')
+					return;
+					this.map.remove(this.borderPolygonMarker);
+				}
+
+
+
+				this.borderPolygonMarker = new AMap.Polygon({
+					map: this.map,
+					path: item.polygonArr, //设置多边形边界路径
+					strokeColor: "#DC6464", //线颜色
+					strokeOpacity: 1, //线透明度					
+					strokeWeight: 4, //线宽	
+					strokeStyle: 'dashed',
+					strokeDasharray: [10, 10],
+					fillColor: "#DC6464", //填充色
+					fillOpacity: 0.1 //填充透明度
+				});
+
+				// 厂界大门渲染
+				try {
+					// console.log(item.doorAddress);
+					MapUtils.renderBoundaryDoor(item.doorAddress, this)
+				} catch (e) {
+					console.log(e);
+				}
+
+
+
+				// 道路渲染
+				let isRoadApi = POLLUTION_ARR.includes(this.roadPollutionId);
+				if (isRoadApi) {
+					RoadUtils.renderRoad(this.roadPollutionId, this);
+				}
+
+				if (item.polygonArr.length > 0) {
+					console.log('fit');
+					this.map.setFitView(this.borderPolygonMarker);
+				}
+			},
+
+			// 添加多面形状
+			addPolygon(polygonArr) {
+				this.map.remove(this.polygonMarker);
+
+				if (polygonArr.length == 0) {
+					return;
+				}
+
+				if (!this.map) {
+					return;
+				}
+
+
+				let offset = new AMap.Pixel(0, 0);
+
+				let self = this;
+				// this.map.remove(this.polygonMarker);
+
+				// console.log(polygonArr);
+
+				// 渲染多边形大门
+				MapUtils.renderProductDoor(polygonArr, this)
+
+				polygonArr.forEach(item => {
+
+					let polygon = new AMap.Polygon({
+						map: this.map,
+						extData: item,
+						path: item.polygonArr, //设置多边形边界路径
+						strokeColor: item.checked ? "#52C47C" : "#979EED", //线颜色
+						strokeOpacity: 1, //线透明度					
+						strokeWeight: item.checked ? 6 : 3, //线宽	
+						// strokeStyle: 'dashed',
+						//    strokeDasharray: [10, 10], 
+						// fillColor: "#DC6464", //填充色
+						fillOpacity: 0.1 //填充透明度
+					});
+
+					polygon.on('click', (evt) => {
+						////console.log(evt);
+						setTimeout(() => {
+							////console.log(evt.target._opts.extData)
+							// 调用 service 层的方法
+							// this.$ownerInstance.callMethod('onViewClick', evt.target.w.extData);		
+							this.$ownerInstance.callMethod('onViewClick', evt.target._opts
+								.extData);
+						}, 200)
+					});
+
+					this.polygonMarker.push(polygon);
+
+				})
+			},
+
+			// path [p1, p2] [[经度,纬度],[经度,纬度]]  pointData 点位数据
+			addLineEvent(path, pointData) {
+				// JD
+				// path[0] = [109.052144675856240, 34.284975851779640] // 测试用，灞桥测试
+
+				// path[0] = [108.98689780575008, 34.158010273511174]
+
+				if (!this.map) {
+					return;
+				}
+
+
+				var p1 = path[0];
+				var p2 = path[1];
+				// var textPos = p1.divideBy(2).add(p2.divideBy(2));
+				// var distance = Math.round(p1.distance(p2));
+				let centerPoint = getCenterPoint(path);
+				let gisDistance = calculateDistance(p1, p2)
+				this.goWayDistance = parseInt(gisDistance); // 到达目标点
+
+
+				console.log(this.startLine, 'startLine');
+				console.log(this.endLine, 'endLine');
+
+				if (!this.line) {
+					this.line = new AMap.Polyline({
+						isOutline: true,
+						outlineColor: '#3278B8',
+						showDir: true,
+						dirColor: 'white',
+						strokeOpacity: 1,
+						lineJoin: 'round',
+						lineCap: 'round',
+						strokeColor: '#5CC5F2', // 线颜色
+						strokeWeight: 8 // 线宽
+					});
+
+					this.line.setMap(this.map);
+				}
+
+				if (!this.startLine) {
+					this.startLine = new AMap.Polyline({
+						isOutline: true,
+						outlineColor: '#ffeeff',
+						borderWeight: 3,
+						strokeColor: "#5CC5F2",
+						strokeOpacity: 1,
+						strokeWeight: 6,
+						// 折线样式还支持 'dashed'
+						strokeStyle: "dashed",
+						// strokeStyle是dashed时有效
+						strokeDasharray: [15, 5],
+						lineJoin: 'round',
+						lineCap: 'round',
+						zIndex: 50,
+					});
+					this.startLine.setMap(this.map);
+				}
+
+				if (!this.endLine) {
+					this.endLine = new AMap.Polyline({
+						isOutline: true,
+						outlineColor: '#ffeeff',
+						borderWeight: 3,
+						strokeColor: "#5CC5F2",
+						strokeOpacity: 1,
+						strokeWeight: 6,
+						// 折线样式还支持 'dashed'
+						strokeStyle: "dashed",
+						// strokeStyle是dashed时有效
+						strokeDasharray: [15, 5],
+						lineJoin: 'round',
+						lineCap: 'round',
+						zIndex: 50,
+					});
+					this.endLine.setMap(this.map);
+				}
+
+				// console.log(localStorage.getItem('ALLOW_WALK_TYPE'), 'location');
+
+				// if (this.roadType == 'walk') {
+				// 是用自研算法还是用高德导航算法
+				let isRoadApi = POLLUTION_ARR.includes(this.roadPollutionId);
+
+				let self = this;
+				let endPath = path[1];
+				if (pointData.MDZB && pointData.MDZB.length > 0) {
+					endPath = [parseFloat(pointData.MDZB[0].JD), parseFloat(pointData.MDZB[0].WD)];
+				}
+
+				// 小于5米的时候，清空，并播报
+				if (gisDistance <= 5) {
+					this.map.remove(this.line);
+					this.map.remove(this.startLine);
+					this.map.remove(this.endLine);
+					this.line = null;
+					this.startLine = null;
+					this.endLine = null;
+					return;
+				}
+
+
+				// // 自研导航
+				if (isRoadApi) {
+					// 判断如果小于5米，直接提示，返回
+					RoadUtils.getSelfRoad(this.roadPollutionId, [path[0], endPath], path[1], pointData, self);
+				} else {
+					this.line.setPath(path);
+				}
+
+				// 高德地图导航
+				// if (!isRoadApi) {
+				// 	RoadUtils.getGDRoad([path[0], endPath], path[1], pointData, self)
+				// }
+
+				// } else {
+				// 	// console.log(path);
+				// 	this.line.setPath(path);
+				// }
+
+				if (this.textMarker) {
+					this.map.remove(this.textMarker);
+				}
+
+				this.textMarker = new AMap.Text({
+					text: '',
+					style: {
+						'background-color': '#29b6f6',
+						'border-color': '#e1f5fe',
+						'font-size': '12px'
+					}
+				});
+				this.textMarker.setMap(this.map)
+
+				if (gisDistance < 0.5) {
+					return;
+				}
+
+				this.textMarker.setText(parseInt(gisDistance) + '米')
+				this.textMarker.setPosition(centerPoint)
+
+				// 保存路径
+				this.oldLinePath = path[1];
+
+			},
+
+			isWalkOrLine(markerArr) {
+				if (markerArr.length > 0 && markerArr[0].type == 'roadType') {
+					this.roadType = markerArr[0].data;
+					this.roadPollutionId = markerArr[0].pollutionId;
+				}
+			},
+
+			// 渲染点位
+			renderMarker(markerArr) {
+				// TODO 偏移后续统一处理，圆形和箭头处理方式不一样，
+				// 圆形 center center  箭头 center bottom 负数
+
+
+				let self = this;
+				this.map.remove(this.countMarkers);
+
+
+				markerArr.forEach(item => {
+					// 常规要素点位
+					let offset = new AMap.Pixel(-11, -25.38);
+
+
+					if (item.type == 'pollutionData') { // 要素点位偏移
+						offset = new AMap.Pixel(-11, -25.38);
+					} else if (item.type == 'pollutionDataClick') { // 要素选中点位偏移
+						offset = new AMap.Pixel(-22.75, -52.5);
+					} else { // 其他默认是圆形 30*30 
+						offset = new AMap.Pixel(-13, -13);
+					}
+
+					if (item.offset) {
+						offset = new AMap.Pixel(item.offset[0], item.offset[1])
+					} else {
+						// console.log('no offset')
+					}
+
+					let marker = new AMap.Marker({
+						zIndex: 4,
+						map: self.map,
+						position: new AMap.LngLat(item.longitude, item.latitude),
+						content: item.content,
+						extData: item,
+						offset: offset
+					});
+
+
+					function debounce(func, delay) {
+						let timerId = null;
+
+						return function(...args) {
+							clearTimeout(timerId);
+
+							timerId = setTimeout(() => {
+								func.apply(this, args);
+							}, delay);
+						};
+					}
+					////console.log(this.countMarkers);
+					marker.on('click', debounce((evt) => {
+						// 调用 service 层的方法
+						this.$ownerInstance.callMethod('onViewClick', evt.target._opts.extData);
+
+					}, 200));
+
+					this.countMarkers.push(marker);
+
+					// this.changeNoSeletIcon();
+				})
+				this.changeNoSeletIcon();
+			},
+
+			// 改变未选中图标大小
+			changeNoSeletIcon() {
+				var zoom = this.map.getZoom();
+				// console.log(zoom);
+
+				this.countMarkers.forEach(item => {
+					// console.log(item);
+					// console.log(item._opts.extData.SFYGH);
+					if (!item._opts.extData.SFYGH) {
+						let height = item._opts.extData.offset[1];
+
+						if (zoom < 16.5) {
+							item.setOffset(new AMap.Pixel(item._opts.extData.offset[0], height - height / 2 * 0.5))
+							$('.normalP').css('transform', ' scale(0.5)');
+						}
+
+						if (zoom >= 16.5 && zoom < 18) {
+							item.setOffset(new AMap.Pixel(item._opts.extData.offset[0], height - height / 2 * 0.2))
+							$('.normalP').css('transform', ' scale(0.8)');
+						}
+
+						if (zoom >= 18) {
+							item.setOffset(new AMap.Pixel(item._opts.extData.offset[0] * 1, item._opts.extData
+								.offset[1] * 1))
+							$('.normalP').css('transform', ' scale(1)');
+						}
+
+					}
+				})
+			},
+
+
+			// 总数的叠加  longitude, latitude, content 必须传
+			addHtmlMarker(markerArrData) {
+
+				// 判断步行导航，还是直接划线
+				this.isWalkOrLine(markerArrData);
+
+
+				// 空的时候不处理
+				if (markerArrData.length == 0) {
+					return;
+				}
+
+				if (!this.map) {
+					return;
+				}
+
+				if (markerArrData[0].type == 'locationData') {
+					this.addLocationMarker(markerArrData[0])
+					return;
+				}
+
+
+				let markerArr = []; // 点位
+				let polygonArr = []; // 面
+				let aroundArr = []; // 周边，最大
+				let locationArr = [];
+				let goWayArr = []; // 去这里数组
+
+				// this.setLayersEvent(true);
+
+				markerArrData.forEach(item => {
+
+					// 切换layer 判断
+					if (item.type == 'layerType') {
+						this.setLayersEvent(item.value);
+					} else if (item.type == 'roadType') {
+
+					} else if (item.type == 'areaData') {
+						polygonArr.push(item);
+					} else if (item.type == 'aroundData') {
+						aroundArr.push(item);
+					} else if (item.type == 'locationData') {
+						locationArr.push(item);
+					} else if (item.type == 'goWay') {
+						goWayArr.push(item);
+						// 判断是否同一个目标点
+						// if (this.goWayArr.length > 0) {
+						// 	if (item.XH != this.goWayArr[0].XH) {
+						// 		// 清空路线
+						// 		this.roadWalkArr = [];
+						// 	}
+						// }
+					} else if (item.type == 'selectSum') { // 选中数量
+						// 选中为0，自动居中
+						if (item.value == 0) {
+							this.map.setFitView();
+						}
+					} else {
+						markerArr.push(item);
+						// 选中的节点，居中
+						if (item.selectItem) {
+							this.map.setCenter([item.DWSJ[0].JD, item.DWSJ[0].WD]);
+						}
+					}
+				})
+				this.markerArr = markerArr;
+				this.polygonArr = polygonArr;
+				this.aroundArr = aroundArr;
+				this.locationArr = locationArr;
+				this.goWayArr = goWayArr;
+
+
+
+				// 添加边界
+				if (aroundArr.length > 0) {
+					this.addBorderPolygon(aroundArr[0], 'aroundArr');
+				}
+
+
+
+				// 添加点位
+				this.renderMarker(markerArr);
+
+				// 添加面
+				this.addPolygon(polygonArr, 'polygonArr');
+
+
+				if (this.firstRender && aroundArr.length == 0) {
+					// console.log('aroundArr 0');
+					this.map.setFitView();
+
+					this.firstRender = false;
+				}
+
+
+				// 定位点位与要到达点位的连线
+				if (locationArr.length > 0) {
+					this.addLocationMarker({
+						lng: locationArr[0].longitude,
+						lat: locationArr[0].latitude,
+						angle: locationArr[0].angle,
+						center: locationArr[0].center
+					})
+					this.renderPointToLine(locationArr);
+				}
+
+
+				// 点位判断
+				var zoom = this.map.getZoom();
+
+				if (zoom > 19) {
+					this.$('.pointTitle').show();
+				} else {
+					this.$('.pointTitle').hide();
+				}
+
+			},
+			renderPointToLine(locationArr) {
+				let markerArr = this.markerArr;
+				let polygonArr = this.polygonArr;
+				let aroundArr = this.aroundArr;
+				let goWayArr = this.goWayArr;
+
+
+				// TODO 判断是否导航的线路，如果有加入检查的字段，就连线到检查，如果没有，就默认最近
+				if (locationArr.length > 0) {
+					// 先排序，根据距离
+
+					// 默认选中去哪里的时候
+					if (goWayArr.length > 0) {
+
+						// 判断如果不在点位里面不显示线
+						let hasItem = false;
+						// console.log(goWayArr)
+						markerArr.forEach(i => {
+							if (i.XH == goWayArr[0].XH) {
+								hasItem = true;
+							}
+						})
+
+						polygonArr.forEach(it => {
+							// console.log(it);
+							if (it.XH == goWayArr[0].XH) {
+								hasItem = true;
+							}
+						})
+
+						if (!hasItem) {
+							if (this.line) {
+								// this.map.remove(this.line)
+								// this.line.setPath([]);
+							}
+							return;
+						}
+
+
+						this.addLineEvent([
+							[locationArr[0].longitude, locationArr[0].latitude],
+							[parseFloat(goWayArr[0].longitude), parseFloat(goWayArr[0].latitude)]
+						], goWayArr[0]);
+					} else {
+						// 清空道路导航数据
+						this.roadWalkArr = [];
+						if (this.line) {
+							// this.map.remove(this.line)
+							// this.map.remove(this.startLine)
+							// this.map.remove(this.endLine)
+							// this.line.setPath([]);
+
+							this.map.remove(this.line);
+							this.map.remove(this.startLine);
+							this.map.remove(this.endLine);
+							this.line = null;
+							this.startLine = null;
+							this.endLine = null;
+						}
+					}
+
+					// 如果不是步行导航，返回，并不需要连线
+					if (self.roadType == 'walk') {
+						return;
+					}
+
+					// 没有默认选中去哪里的时候
+					if (goWayArr.length == 0) {
+						let newMarkerArr = [];
+
+						let endPath = [];
+						for (let i = 0; i < markerArr.length; i++) {
+							if (!markerArr[i].SFYJC) {
+								newMarkerArr.push(markerArr[i]);
+							}
+						}
+
+						// 距离计算
+						let distanceArr = newMarkerArr.sort((a, b) => {
+							let agisDistance = calculateDistance([locationArr[0].longitude, locationArr[0]
+								.latitude
+							], [a.DWSJ[0].JD, a.DWSJ[0].WD])
+
+							let bgisDistance = calculateDistance([locationArr[0].longitude, locationArr[0]
+								.latitude
+							], [b.DWSJ[0].JD, b.DWSJ[0].WD])
+
+							return agisDistance - bgisDistance;
+						})
+
+
+						if (distanceArr.length > 0) {
+							if (this.roadType == 'line') {
+								this.addLineEvent([
+									[locationArr[0].longitude, locationArr[0].latitude],
+									[parseFloat(distanceArr[0].DWSJ[0].JD), parseFloat(distanceArr[0].DWSJ[0].WD)]
+								], distanceArr[0]);
+							}
+
+						} else {
+							if (!this.map) {
+								return;
+							}
+
+							if (this.line) {
+								// this.map.remove(this.line)
+								this.map.remove(this.line);
+								this.map.remove(this.startLine);
+								this.map.remove(this.endLine);
+								this.line = null;
+								this.startLine = null;
+								this.endLine = null;
+							}
+						}
+					}
+				}
+			},
+
+			// 设置地图图层，影像图或者普通图
+			setLayersEvent(layers) {
+				////console.log(layers, 'layers2');
+
+				if (!this.map) {
+					return;
+				}
+
+				// console.log(layers, 'layers');
+				if (layers) {
+					this.map.add([this.satellite, this.roadNet])
+					// this.map.setMapStyle('amap://styles/dark')
+				}
+
+				if (!layers) {
+					this.map.remove([this.satellite, this.roadNet]);
+				}
+			},
+
+			// 设置地图皮肤
+			setMapStyleEvent(styleName) {
+
+				////console.log(styleName);
+				if (this.map) {
+					this.map.remove([this.satellite, this.roadNet]);
+					this.map.setMapStyle(styleName)
+				}
+			},
+
+			setMapZoom(index) {
+				if (this.map) {
+					this.map.setZoom(index);
+				}
+			},
+
+			// 设置中心点
+			setMapCenter(centerObj) {
+				if (this.map) {
+					this.map.setCenter(centerObj.center);
+				}
+			},
+
+			setMapBorderStyle(borderObj) {
+				if (this.map) {
+					let code = borderObj.adCode;
+					let dep = borderObj.depth;
+					let style = borderObj.style;
+
+					// this.map.remove(this.disProvince);
+					dep = typeof dep == 'undefined' ? 2 : dep;
+					// var disProvince;
+					var adCode = code;
+					var depth = dep;
+					this.disProvince && this.disProvince.setMap(null);
+
+					try {
+						if (borderObj.style.fillData) {
+							////console.log('>0', borderObj.style.fillData)
+							let fillData = borderObj.style.fillData;
+							borderObj.style.fillData = null;
+							style.fill = function(properties) {
+								let color = '#E0FFFF';
+								fillData.forEach(item => {
+									if (item.ORGID == properties.adcode) {
+										color = getMapColor(borderObj.style.size, item.TOTAL);
+									}
+								})
+								return color;
+							}
+
+						}
+					} catch (e) {
+
+					}
+
+					this.disProvince = new AMap.DistrictLayer.Province({
+						zIndex: 12,
+						adcode: [code],
+						depth: dep,
+						styles: style
+					});
+
+					this.disProvince.setMap(this.map);
+				}
+			},
+
+			initAmap() {
+
+
+				let map = new AMap.Map('amap', {
+					pitch: 0,
+					// viewMode: '3D', // TODO 后续需要优化再用 3D地图模式
+					resizeEnable: true,
+					mapStyle: 'amap://styles/c466371bcf337b3bd1f91fd549ff8ec1',
+					layers: [ //使用多个图层
+						// new AMap.TileLayer.Satellite(), //使用卫星图
+						// new AMap.TileLayer.RoadNet()
+					],
+					center: [108.95, 34.27], // TODO 其他项目需要替换
+					expandZoomRange: true,
+					zooms: [2, 23], //设置地图级别范围
+					zoom: 16
+				})
+				this.map = map;
+
+				this.satellite = new AMap.TileLayer.Satellite();
+				this.roadNet = new AMap.TileLayer.RoadNet();
+
+				this.$ownerInstance.callMethod('onViewClick', {
+					type: 'renderFinish'
+				});
+
+
+				var xyzTileLayer = new AMap.TileLayer({
+					// 图块取图地址
+					'getTileUrl': function(x, y, z) {
+						// console.log(z, 'z--------')
+						var a =
+							`http://113.140.66.230:19090/ydzfsx/resources/drone/${z}/${x}/${y}.png`;
+						return a;
+					},
+					zooms: [2, 23],
+					// opacity: 0.2,
+					dataZooms: [2, 23],
+					zIndex: 2
+				});
+
+
+				map.add(xyzTileLayer);
+
+
+				// 获取点位
+				map.on('click', function(e) {
+					console.log(e.lnglat.getLng(), e.lnglat.getLat())
+				});
+
+				let self = this;
+				this.map.on('zoomend', (e) => {
+
+
+					setTimeout(() => {
+						var zoom = this.map.getZoom();
+
+						// 改变图标大小
+						this.changeNoSeletIcon();
+						// console.log(zoom);
+						if (zoom > 19) {
+							this.$('.pointTitle').show();
+						} else {
+							this.$('.pointTitle').hide();
+						}
+					}, 50)
+				})
+
+				this.map.on('zoomchange', (e) => {
+					if (this.$ownerInstance) {
+						setTimeout(() => {
+							var zoom = this.map.getZoom();
+							var tmapBounds = this.map.getBounds();
+							////console.log(tmapBounds)
+							// var northwest = this.map.getBounds().getNorthWest();  //西北
+							// var eastsouth = this.map.getBounds().getSouthEast();  //东南
+							// this.$ownerInstance.callMethod('onViewClick', {
+							// 	type: 'changeZoom',
+							// 	zoom: zoom,
+							// 	northwest: northwest,
+							// 	eastsouth: eastsouth
+							// });
+							this.$ownerInstance.callMethod('onViewClick', {
+								type: 'zoomchange',
+								zoom: zoom,
+								tmapBounds: tmapBounds
+							});
+						}, 50)
+
+					}
+				})
+
+
+				this.map.on('dragend', (e) => {
+					if (this.$ownerInstance) {
+						setTimeout(() => {
+							var zoom = this.map.getZoom();
+							var tmapBounds = this.map.getBounds();
+							// var northwest = this.map.getBounds().getNorthWest();  //西北
+							// var eastsouth = this.map.getBounds().getSouthEast();  //东南
+							// this.$ownerInstance.callMethod('onViewClick', {
+							// 	type: 'dragend',
+							// 	zoom: zoom,
+							// 	northwest: northwest,
+							// 	eastsouth: eastsouth
+							// });
+							this.$ownerInstance.callMethod('onViewClick', {
+								type: 'dragend',
+								zoom: zoom,
+								tmapBounds: tmapBounds
+							});
+						}, 50)
+					}
+				})
+
+
+				// 隐藏高德地图logo
+				this.hideLogo();
+
+			},
+			onClick(event, ownerInstance) {
+				this.ownerInstanceObj = ownerInstance;
+			},
+			hideLogo() {
+				setTimeout(() => {
+					try {
+						document.getElementsByClassName("amap-logo")[0].style =
+							'position:relative; top: -100000px;display:none!important';
+						document.getElementsByClassName("amap-copyright")[0].style =
+							'position:relative; top: -100000px;display:none!important';
+					} catch (e) {
+						console.log(e);
+					}
+
+				}, 1000)
+			}
+		}
+	}
+</script>
+
+<style>
+	.locationmaps {
+		/* height: calc(100vh - 50rpx); */
+		height: 100vh;
+		width: 100vw;
+	}
+</style>
